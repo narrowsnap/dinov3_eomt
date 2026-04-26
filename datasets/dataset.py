@@ -92,6 +92,7 @@ class Dataset(torch.utils.data.Dataset):
         self.labels_by_id = {}
         self.polygons_by_id = {}
         self.is_crowd_by_id = {}
+        self.bboxes_by_id = {}
 
         if annotations_json_path_in_zip is not None:
             source_path = target_zip_path or zip_path
@@ -133,12 +134,18 @@ class Dataset(torch.utils.data.Dataset):
                     if img_filename not in self.is_crowd_by_id:
                         self.is_crowd_by_id[img_filename] = {}
 
+                    if img_filename not in self.bboxes_by_id:
+                        self.bboxes_by_id[img_filename] = {}
+
                     self.labels_by_id[img_filename][annotation["id"]] = annotation[
                         "category_id"
                     ]
                     self.polygons_by_id[img_filename][annotation["id"]] = annotation[
                         "segmentation"
                     ]
+                    self.bboxes_by_id[img_filename][annotation["id"]] = annotation.get(
+                        "bbox"
+                    )
                     self.is_crowd_by_id[img_filename][annotation["id"]] = bool(
                         annotation["iscrowd"]
                     )
@@ -247,6 +254,7 @@ class Dataset(torch.utils.data.Dataset):
             polygons_by_id=self.polygons_by_id.get(self.annotation_keys[index], {}),
             labels_by_id=self.labels_by_id.get(self.annotation_keys[index], {}),
             is_crowd_by_id=self.is_crowd_by_id.get(self.annotation_keys[index], {}),
+            bboxes_by_id=self.bboxes_by_id.get(self.annotation_keys[index], {}),
             width=img.shape[-1],
             height=img.shape[-2],
         )
