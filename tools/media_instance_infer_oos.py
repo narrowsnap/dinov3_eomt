@@ -94,6 +94,9 @@ DEFAULT_INSTRUMENT_CLASS_NAMES = [
 ]
 
 _VIDEO_READER_CLASS = None
+DEFAULT_OOS_ANNOTATION_JSON = (
+    "/mnt/FileExchange/users/zhouyang/instruments/data/oos_segment_box_dict_light.json"
+)
 VIDEO_SAME_CLASS_DEDUP_MASK_IOU_THRESH = 0.70
 VIDEO_DEDUP_MASK_IOU_THRESH = 0.90
 VIDEO_DEDUP_CONTAIN_THRESH = 0.95
@@ -121,6 +124,11 @@ def parse_args():
     parser.add_argument("--input-dir", help="输入图片目录")
     parser.add_argument("--output-path", help="输出图片或视频路径")
     parser.add_argument("--output-dir", help="多视频模式输出目录")
+    parser.add_argument(
+        "--oos-annotation-json",
+        default=DEFAULT_OOS_ANNOTATION_JSON,
+        help="OOS 专用：首帧坐标标注 json 路径",
+    )
     parser.add_argument("--device", default="cuda:0", help="推理设备")
     parser.add_argument("--score-thresh", type=float, default=0.5, help="分数阈值")
     parser.add_argument("--top-k", type=int, default=64, help="每张图保留的 query 数")
@@ -302,6 +310,22 @@ def build_output_npz_path_for_video(video_path: Path, npz_dir: Path) -> Path:
     return npz_dir / f"{video_path.stem}_rendered.npz"
 
 
+def load_oos_annotation_map(path: str) -> dict[str, list[dict[str, Any]]]:
+    json_path = Path(path)
+    if not json_path.is_file():
+        print(f"OOS 标注文件不存在，跳过 OOS 规则: {json_path}")
+        return {}
+    raw = json.loads(json_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return {}
+    return {str(Path(key).name): value for key, value in raw.items() if isinstance(value, list)}
+
+
+def bbox_center_xy(bbox: Sequence[float]) -> tuple[float, float]:
+    x, y, w, h = [float(v) for v in bbox[:4]]
+    return x + w / 2.0, y + h / 2.0
+
+
 def save_dense_outputs_to_npz(
     dense_outputs_per_frame: Sequence[dict[str, np.ndarray]],
     output_path: Path,
@@ -452,6 +476,7 @@ class VideoPostProcessor:
         self.velocity_momentum = velocity_momentum
         self.tracks: list[VideoTrack] = []
         self.next_track_id = 0
+        self.locked_track_labels: dict[int, int] = {}
 
     def update(
         self,
@@ -482,10 +507,11 @@ class VideoPostProcessor:
             track = self.tracks[track_idx]
             detection = detections[det_idx]
             self._update_track(track, detection)
+            label = self.locked_track_labels.get(track.track_id, track.stable_label)
             final_detections.append(
                 VideoDetection(
                     mask=detection.mask,
-                    label=track.stable_label,
+                    label=label,
                     score=detection.score,
                     track_id=track.track_id,
                     box=detection.box,
@@ -498,10 +524,11 @@ class VideoPostProcessor:
             detection = detections[det_idx]
             track = self._create_track(detection)
             matched_track_ids.add(track.track_id)
+            label = self.locked_track_labels.get(track.track_id, track.stable_label)
             final_detections.append(
                 VideoDetection(
                     mask=detection.mask,
-                    label=track.stable_label,
+                    label=label,
                     score=detection.score,
                     track_id=track.track_id,
                     box=detection.box,
@@ -678,6 +705,23 @@ class VideoPostProcessor:
             if track.track_id == track_id:
                 return track.velocity.astype(np.float32)
         return np.zeros(2, dtype=np.float32)
+
+    def lock_track_label(self, track_id: int, label: int) -> None:
+        self.locked_track_labels[int(track_id)] = int(label)
+
+    def get_track_id_at_point(self, x: float, y: float, current_obj_ids: np.ndarray, current_masks: np.ndarray) -> int | None:
+        px = int(round(x))
+        py = int(round(y))
+        if current_masks.ndim != 3:
+            return None
+        height = current_masks.shape[1]
+        width = current_masks.shape[2]
+        if px < 0 or py < 0 or px >= width or py >= height:
+            return None
+        for obj_id, mask in zip(current_obj_ids.tolist(), current_masks):
+            if bool(mask[py, px]):
+                return int(obj_id)
+        return None
 
 
 def _candidate_video_reader_lib_dirs() -> list[Path]:
@@ -1065,6 +1109,14 @@ def infer_video_to_path(
     if npz_output_path is None:
         npz_output_path = build_output_npz_path(output_path)
     dense_outputs_per_frame: list[dict[str, np.ndarray]] = []
+    oos_annotation_map = load_oos_annotation_map(args.oos_annotation_json)
+    video_oos_entries = oos_annotation_map.get(input_video.name, [])
+    oos_label_name = "oos"
+    oos_label_id = len(class_names)
+    render_class_names = list(class_names)
+    if oos_label_name not in render_class_names:
+        render_class_names.append(oos_label_name)
+    oos_locked = False
     postprocessor = VideoPostProcessor(
         same_class_dedup_mask_iou_thresh=args.video_same_class_dedup_mask_iou_thresh,
         dedup_mask_iou_thresh=args.video_dedup_mask_iou_thresh,
@@ -1091,6 +1143,7 @@ def infer_video_to_path(
     )
 
     try:
+        frame_index = 0
         while True:
             batch_rgb = reader.read_batch()
             if batch_rgb is None or len(batch_rgb) == 0:
@@ -1117,6 +1170,32 @@ def infer_video_to_path(
                 masks, labels, scores, obj_ids, motion_vectors = postprocessor.update(
                     masks, labels, scores
                 )
+                if frame_index == 0 and video_oos_entries and not oos_locked:
+                    for entry in video_oos_entries:
+                        if str(entry.get("category_name", "")).lower() != "oos":
+                            continue
+                        bbox = entry.get("bbox")
+                        if not isinstance(bbox, list) or len(bbox) < 4:
+                            continue
+                        center_x, center_y = bbox_center_xy(bbox)
+                        matched_track_id = postprocessor.get_track_id_at_point(
+                            center_x, center_y, obj_ids, masks
+                        )
+                        if matched_track_id is not None:
+                            postprocessor.lock_track_label(matched_track_id, oos_label_id)
+                            labels = labels.copy()
+                            labels[obj_ids == matched_track_id] = oos_label_id
+                            oos_locked = True
+                            print(
+                                f"OOS 命中: {input_video.name}, track_id={matched_track_id}, "
+                                f"point=({center_x:.1f}, {center_y:.1f})"
+                            )
+                            break
+                    if not oos_locked:
+                        print(f"OOS 未命中首帧预测实例: {input_video.name}")
+                elif frame_index == 0 and not video_oos_entries:
+                    print(f"OOS 标注中未找到对应视频: {input_video.name}")
+
                 dense_outputs_per_frame.append(
                     {
                         "obj_ids": obj_ids,
@@ -1132,19 +1211,20 @@ def infer_video_to_path(
                     masks=masks,
                     labels=labels,
                     scores=scores,
-                    class_names=class_names,
+                    class_names=render_class_names,
                     alpha=args.alpha,
                     font=font,
                 )
                 panel = render_side_by_side(frame_bgr, rendered)
                 writer.write(panel)
+                frame_index += 1
     finally:
         reader.close()
         writer.release()
     save_dense_outputs_to_npz(
         dense_outputs_per_frame=dense_outputs_per_frame,
         output_path=npz_output_path,
-        category_names=class_names,
+        category_names=render_class_names,
     )
 
 

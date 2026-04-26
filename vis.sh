@@ -5,3 +5,5 @@ python tools/video_instance_infer.py \
     --output-video /mnt/data/projects/bladder_neck/videos/2vW38wO4dz_00-40-50_00-41-30_output.mp4 \
     --class-names prostate cutting_area bladder \
     --device cuda:0
+
+    

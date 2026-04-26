@@ -9,6 +9,7 @@ IO_WORKERS=4
 PREFETCH_BATCHES=3
 IMAGE_CACHE_SIZE=256
 VIDEO_WORKERS=2
+OOS_ANNOTATION_JSON="/mnt/FileExchange/users/zhouyang/instruments/data/oos_dir_range_clips_30fps_box_dict_light.json"
 
 # 直接在这里填写推理输入，不再从命令行传参
 MODE="videos"
@@ -32,10 +33,11 @@ COMMON_ARGS=(
     --prefetch-batches "$PREFETCH_BATCHES"
     --image-cache-size "$IMAGE_CACHE_SIZE"
     --video-workers "$VIDEO_WORKERS"
+    --oos-annotation-json "$OOS_ANNOTATION_JSON"
 )
 
 if [[ "$MODE" == "video" ]]; then
-    python tools/media_instance_infer.py \
+    python tools/media_instance_infer_oos.py \
         "${COMMON_ARGS[@]}" \
         --mode video \
         --input-video "$INPUT_VIDEO" \
@@ -52,20 +54,20 @@ elif [[ "$MODE" == "videos" ]]; then
         echo "MODE=videos 时，请设置 INPUT_VIDEO_DIR 或 INPUT_VIDEO_LIST"
         exit 1
     fi
-    python tools/media_instance_infer.py \
+    python tools/media_instance_infer_oos.py \
         "${COMMON_ARGS[@]}" \
         --mode videos \
         "${EXTRA_ARGS[@]}" \
         --output-dir "$OUTPUT_DIR" \
         --output-path "$OUTPUT_DIR"
 elif [[ "$MODE" == "image" ]]; then
-    python tools/media_instance_infer.py \
+    python tools/media_instance_infer_oos.py \
         "${COMMON_ARGS[@]}" \
         --mode image \
         --input-image "$INPUT_IMAGE" \
         --output-path "$OUTPUT_PATH"
 elif [[ "$MODE" == "images" ]]; then
-    python tools/media_instance_infer.py \
+    python tools/media_instance_infer_oos.py \
         "${COMMON_ARGS[@]}" \
         --mode images \
         --input-dir "$INPUT_IMAGE_DIR" \
