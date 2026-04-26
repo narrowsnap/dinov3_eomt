@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from typing import Tuple
 import torch
+import warnings
 from PIL import Image
 from torch.utils.data import get_worker_info
 from torchvision import tv_tensors
@@ -69,6 +70,7 @@ class Dataset(torch.utils.data.Dataset):
         target_folder_path_in_zip: Path = Path("./"),
         target_instance_folder_path_in_zip: Path = Path("./"),
         annotations_json_path_in_zip: Optional[Path] = None,
+        item_retry_times: int = 8,
     ):
         self.zip_path = zip_path
         self.target_parser = target_parser
@@ -80,6 +82,7 @@ class Dataset(torch.utils.data.Dataset):
         self.target_instance_zip_path = target_instance_zip_path
         self.target_folder_path_in_zip = target_folder_path_in_zip
         self.target_instance_folder_path_in_zip = target_instance_folder_path_in_zip
+        self.item_retry_times = item_retry_times
 
         self.zip = None
         self.target_zip = None
@@ -141,6 +144,7 @@ class Dataset(torch.utils.data.Dataset):
                     )
 
         self.imgs = []
+        self.annotation_keys = []
         self.targets = []
         self.targets_instance = []
 
@@ -153,6 +157,7 @@ class Dataset(torch.utils.data.Dataset):
                 continue
 
             img_path = Path(img_info.filename)
+            annotation_key = self._annotation_key(img_path, img_folder_path_in_zip)
             if not only_annotations_json:
                 rel_path = img_path.relative_to(img_folder_path_in_zip)
                 target_parent = target_folder_path_in_zip / rel_path.parent
@@ -161,10 +166,10 @@ class Dataset(torch.utils.data.Dataset):
                 target_filename = (target_parent / f"{target_stem}{target_suffix}").as_posix()
 
             if self.labels_by_id:
-                if img_path.name not in self.labels_by_id:
+                if annotation_key not in self.labels_by_id:
                     continue
 
-                if not self.labels_by_id[img_path.name]:
+                if not self.labels_by_id[annotation_key]:
                     continue
             else:
                 if target_filename not in target_zip_filenames:
@@ -200,6 +205,7 @@ class Dataset(torch.utils.data.Dataset):
                                 continue
 
             self.imgs.append(img_path.as_posix())
+            self.annotation_keys.append(annotation_key)
 
             if not only_annotations_json:
                 self.targets.append(target_filename)
@@ -207,7 +213,7 @@ class Dataset(torch.utils.data.Dataset):
             if target_instance_zip is not None:
                 self.targets_instance.append(target_instance_filename)
 
-    def __getitem__(self, index: int):
+    def _get_item_impl(self, index: int):
         img_zip, target_zip, target_instance_zip = self._load_zips()
 
         with img_zip.open(self.imgs[index]) as img:
@@ -238,12 +244,23 @@ class Dataset(torch.utils.data.Dataset):
             target=target,
             target_instance=target_instance,
             stuff_classes=self.stuff_classes,
-            polygons_by_id=self.polygons_by_id.get(Path(self.imgs[index]).name, {}),
-            labels_by_id=self.labels_by_id.get(Path(self.imgs[index]).name, {}),
-            is_crowd_by_id=self.is_crowd_by_id.get(Path(self.imgs[index]).name, {}),
+            polygons_by_id=self.polygons_by_id.get(self.annotation_keys[index], {}),
+            labels_by_id=self.labels_by_id.get(self.annotation_keys[index], {}),
+            is_crowd_by_id=self.is_crowd_by_id.get(self.annotation_keys[index], {}),
             width=img.shape[-1],
             height=img.shape[-2],
         )
+        if not masks:
+            raise RuntimeError(
+                f"样本没有可用实例，请检查标注解析或类别映射: {self.imgs[index]}"
+            )
+
+        masks = [
+            self._resize_mask_to_shape(mask, img.shape[-2:])
+            if tuple(mask.shape[-2:]) != tuple(img.shape[-2:])
+            else mask
+            for mask in masks
+        ]
 
         target = {
             "masks": tv_tensors.Mask(torch.stack(masks)),
@@ -258,6 +275,52 @@ class Dataset(torch.utils.data.Dataset):
         target["image_path"] = self.imgs[index]
 
         return img, target
+
+    def __getitem__(self, index: int):
+        last_error = None
+        tried_indices = {index}
+
+        for attempt in range(self.item_retry_times + 1):
+            try:
+                return self._get_item_impl(index)
+            except Exception as exc:
+                last_error = exc
+                if attempt >= self.item_retry_times or len(tried_indices) >= len(self.imgs):
+                    break
+
+                next_index = index
+                while next_index in tried_indices:
+                    next_index = int(torch.randint(len(self.imgs), size=(1,)).item())
+                tried_indices.add(next_index)
+                warnings.warn(
+                    f"读取样本失败，改为随机重试: {self.imgs[index]} -> {self.imgs[next_index]} ({exc})",
+                    RuntimeWarning,
+                )
+                index = next_index
+
+        raise RuntimeError(
+            f"样本重试失败，最后一次索引: {index}, 原始错误: {last_error}"
+        ) from last_error
+
+    @staticmethod
+    def _annotation_key(
+        img_path: Path, img_folder_path_in_zip: Optional[Path] = None
+    ) -> str:
+        if img_folder_path_in_zip is not None:
+            rel_path = img_path.relative_to(img_folder_path_in_zip)
+            return rel_path.as_posix()
+        return img_path.as_posix()
+
+    @staticmethod
+    def _resize_mask_to_shape(
+        mask: tv_tensors.Mask, shape: tuple[int, int]
+    ) -> tv_tensors.Mask:
+        resized = F.resize(
+            mask,
+            list(shape),
+            interpolation=F.InterpolationMode.NEAREST,
+        )
+        return tv_tensors.Mask(resized, dtype=torch.bool)
 
     def _load_zips(
         self,

@@ -14,7 +14,11 @@ import logging
 import torch
 import warnings
 from lightning.pytorch import cli
-from lightning.pytorch.callbacks import ModelSummary, LearningRateMonitor
+from lightning.pytorch.callbacks import (
+    ModelSummary,
+    LearningRateMonitor,
+    ModelCheckpoint,
+)
 from lightning.pytorch.loops.training_epoch_loop import _TrainingEpochLoop
 from lightning.pytorch.loops.fetchers import _DataFetcher, _DataLoaderIterDataFetcher
 
@@ -171,6 +175,12 @@ def cli_main():
             "callbacks": [
                 ModelSummary(max_depth=3),
                 LearningRateMonitor(logging_interval="epoch"),
+                ModelCheckpoint(
+                    save_last=True,
+                    save_top_k=0,
+                    every_n_epochs=1,
+                    save_on_train_epoch_end=True,
+                ),
             ],
             "devices": 1,
             "gradient_clip_val": 0.01,
