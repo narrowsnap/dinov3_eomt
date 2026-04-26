@@ -156,6 +156,51 @@ A [notebook](inference.ipynb) is available for quick inference and visualization
 
 > **DINOv3 Models**: When using DINOv3-based configurations, the code expects delta weights relative to DINOv3 weights by default. To disable this behavior and use absolute weights instead, add `--model.delta_weights False`. 
 
+### Video Inference Dependency: `video_reader-rs`
+
+The custom video inference script [`tools/media_instance_infer.py`](tools/media_instance_infer.py) uses [`video_reader-rs`](https://github.com/gcanat/video_reader-rs) for video decoding.
+
+Install it with:
+
+```bash
+pip install video-reader-rs
+```
+
+Notes:
+
+- The Python import name is `video_reader`, not `video_reader_rs`.
+- The reader class used in this repository is `PyVideoReader`:
+
+```python
+from video_reader import PyVideoReader
+```
+
+- The current PyPI package requires Python `>=3.9`.
+- On some environments, the wheel may fail to import because the bundled shared libraries under `video_reader_rs.libs/` are not discovered automatically.
+- The inference script in this repository already tries to preload those shared libraries automatically.
+- If you use `video_reader-rs` in a separate script and see shared-library import errors, set `LD_LIBRARY_PATH` manually before running Python:
+
+```bash
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/python3.13/site-packages/video_reader_rs.libs:$LD_LIBRARY_PATH
+```
+
+- If your platform cannot use the prebuilt wheel, install from source with `maturin` and ensure `ffmpeg` is available on the system:
+
+```bash
+pip install maturin
+maturin develop --release
+```
+
+- If your system FFmpeg version is `<=5`, the upstream project documents building with:
+
+```bash
+maturin develop --release --features ffmpeg_5
+```
+
+- `PyVideoReader.get_batch(indices)` returns an array with shape `(N, H, W, 3)` and dtype `uint8`.
+- For indexed random access on videos with B-frames, you may need `with_fallback=True` depending on your use case.
+- For long or high-resolution videos, avoid decoding the whole video into memory at once; prefer batched reads.
+
 ## Model Zoo
 
 We provide pre-trained weights for both DINOv2- and DINOv3-based EoMT models.
