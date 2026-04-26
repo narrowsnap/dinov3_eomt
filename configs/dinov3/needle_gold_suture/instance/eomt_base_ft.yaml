@@ -1,12 +1,12 @@
 trainer:
   max_epochs: 12
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: 120
   logger:
     class_path: lightning.pytorch.loggers.wandb.WandbLogger
     init_args:
       resume: allow
       project: "eomt"
-      name: "needle_gold_suture_instance_eomt_base_640_dinov3_ft"
+      name: "needle_gold_suture_instance_eomt_base_1024_dinov3_ft"
 model:
   class_path: training.mask_classification_instance.MaskClassificationInstance
   init_args:
@@ -31,7 +31,7 @@ model:
 data:
   class_path: datasets.coco_instance_local.COCOInstanceLocal
   init_args:
-    path: /mnt/data2/datasets/instruments_2.0/needle_gold_suture_only_coco
+    path: /mnt/data2/datasets/instruments_2.0/needle_gold_suture_only_seg_coco
     train_image_dir: train
     val_image_dir: val
     train_annotations: annotations/instances_train.json

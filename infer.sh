@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="configs/dinov3/instruments/instance/eomt_base_640_ft.yaml"
-CKPT="/mnt/FileExchange/users/zhouyang/instruments/models/eomt_ep12.ckpt"
+# CONFIG="configs/dinov3/instruments/instance/eomt_base_640_ft.yaml"
+CONFIG="configs/dinov3/needle_gold_suture/instance/eomt_base_640_ft.yaml"
+CKPT="eomt/m6ie63as/checkpoints/last.ckpt"
 DEVICE="cuda:0"
 
 MODE="videos"
 
 INPUT_VIDEO=""
-INPUT_VIDEO_DIR="/mnt/FileExchange/users/zhouyang/instruments/data/oos_dir_range_clips_30fps"
-INPUT_VIDEO_LIST=""
+INPUT_VIDEO_DIR=""
+INPUT_VIDEO_LIST="/mnt/FileExchange/users/zhouyang/instruments/data/needle_gold_full_robot.txt"
 INPUT_IMAGE=""
 INPUT_IMAGE_DIR=""
 
 OUTPUT_PATH=""
-OUTPUT_DIR="/mnt/FileExchange/users/zhouyang/instruments/test/oos"
+OUTPUT_DIR="/mnt/FileExchange/users/zhouyang/instruments/test/needle"
 
 BATCH_SIZE=4
 IO_WORKERS=4
