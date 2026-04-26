@@ -443,7 +443,20 @@ class LightningModule(lightning.LightningModule):
             classes = results.get("classes")
             map_per_class = results.get("map_per_class")
             if classes is not None and map_per_class is not None:
-                for class_idx, ap in zip(classes.tolist(), map_per_class):
+                if hasattr(classes, "reshape"):
+                    classes = classes.reshape(-1)
+                elif not isinstance(classes, (list, tuple)):
+                    classes = [classes]
+
+                if hasattr(map_per_class, "reshape"):
+                    map_per_class = map_per_class.reshape(-1)
+                elif not isinstance(map_per_class, (list, tuple)):
+                    map_per_class = [map_per_class]
+
+                for class_idx, ap in zip(
+                    [int(class_idx) for class_idx in classes],
+                    map_per_class,
+                ):
                     self.log(
                         f"metrics/{log_prefix}_ap_class_{int(class_idx)}{block_postfix}",
                         ap,

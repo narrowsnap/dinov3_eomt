@@ -31,7 +31,7 @@ model:
 data:
   class_path: datasets.coco_instance_local.COCOInstanceLocal
   init_args:
-    path: /mnt/FileExchange/users/zhouyang/instruments/data/needle_gold_suture_only_coco
+    path: /mnt/data2/datasets/instruments_2.0/needle_gold_suture_only_coco
     train_image_dir: train
     val_image_dir: val
     train_annotations: annotations/instances_train.json
