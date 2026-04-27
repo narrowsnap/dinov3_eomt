@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 
 TRAIN_SPLIT = "train"
@@ -284,29 +284,33 @@ def normalize_bbox(bbox: Any) -> list[float] | None:
     return [float(value) for value in bbox]
 
 
-def build_coco_split(
+def iter_coco_split_images(
     records: list[VideoRecord],
     split_map: dict[str, str],
-    annotations_by_video: dict[int, list[dict[str, Any]]],
-    categories: list[dict[str, Any]],
     split: str,
-) -> dict[str, Any]:
-    images: list[dict[str, Any]] = []
-    annotations: list[dict[str, Any]] = []
-
+) -> Iterator[dict[str, Any]]:
     for record in records:
         if split_map[record.split_dir_name] != split:
             continue
 
         for frame_idx, rel_file in enumerate(record.file_names):
-            images.append(
-                {
-                    "id": record.video_id * IMAGE_ID_STRIDE + frame_idx,
-                    "file_name": rel_file,
-                    "width": record.width,
-                    "height": record.height,
-                }
-            )
+            yield {
+                "id": record.video_id * IMAGE_ID_STRIDE + frame_idx,
+                "file_name": rel_file,
+                "width": record.width,
+                "height": record.height,
+            }
+
+
+def iter_coco_split_annotations(
+    records: list[VideoRecord],
+    split_map: dict[str, str],
+    annotations_by_video: dict[int, list[dict[str, Any]]],
+    split: str,
+) -> Iterator[dict[str, Any]]:
+    for record in records:
+        if split_map[record.split_dir_name] != split:
+            continue
 
         for ann in annotations_by_video.get(record.video_id, []):
             segmentations = ann.get("segmentations", [])
@@ -321,23 +325,84 @@ def build_coco_split(
                 area = areas[frame_idx] if frame_idx < len(areas) else None
                 if bbox is None or area is None or float(area) <= 0:
                     continue
-                annotations.append(
-                    {
-                        "id": int(ann["id"]) * IMAGE_ID_STRIDE + frame_idx,
-                        "image_id": record.video_id * IMAGE_ID_STRIDE + frame_idx,
-                        "category_id": int(ann["category_id"]),
-                        "segmentation": segmentation,
-                        "area": float(area),
-                        "bbox": bbox,
-                        "iscrowd": int(ann.get("iscrowd", 0)),
-                    }
-                )
+                yield {
+                    "id": int(ann["id"]) * IMAGE_ID_STRIDE + frame_idx,
+                    "image_id": record.video_id * IMAGE_ID_STRIDE + frame_idx,
+                    "category_id": int(ann["category_id"]),
+                    "segmentation": segmentation,
+                    "area": float(area),
+                    "bbox": bbox,
+                    "iscrowd": int(ann.get("iscrowd", 0)),
+                }
 
-    return {
-        "images": images,
-        "annotations": annotations,
-        "categories": categories,
-    }
+
+def count_coco_split(
+    records: list[VideoRecord],
+    split_map: dict[str, str],
+    annotations_by_video: dict[int, list[dict[str, Any]]],
+    split: str,
+) -> tuple[int, int]:
+    image_count = 0
+    annotation_count = 0
+    for record in records:
+        if split_map[record.split_dir_name] != split:
+            continue
+        image_count += len(record.file_names)
+        for ann in annotations_by_video.get(record.video_id, []):
+            segmentations = ann.get("segmentations", [])
+            areas = ann.get("areas", [])
+            bboxes = ann.get("bboxes", [])
+            max_len = min(len(record.file_names), len(segmentations))
+            for frame_idx in range(max_len):
+                segmentation = segmentations[frame_idx]
+                if not segmentation:
+                    continue
+                bbox = normalize_bbox(bboxes[frame_idx] if frame_idx < len(bboxes) else None)
+                area = areas[frame_idx] if frame_idx < len(areas) else None
+                if bbox is None or area is None or float(area) <= 0:
+                    continue
+                annotation_count += 1
+    return image_count, annotation_count
+
+
+def _write_json_items(f, items: Iterator[dict[str, Any]]) -> None:
+    first = True
+    for item in items:
+        if not first:
+            f.write(",")
+        json.dump(item, f, ensure_ascii=False)
+        first = False
+
+
+def write_coco_split_atomic(
+    path: Path,
+    records: list[VideoRecord],
+    split_map: dict[str, str],
+    annotations_by_video: dict[int, list[dict[str, Any]]],
+    categories: list[dict[str, Any]],
+    split: str,
+) -> tuple[int, int]:
+    image_count, annotation_count = count_coco_split(
+        records=records,
+        split_map=split_map,
+        annotations_by_video=annotations_by_video,
+        split=split,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        f.write('{"images":[')
+        _write_json_items(f, iter_coco_split_images(records, split_map, split))
+        f.write('],"annotations":[')
+        _write_json_items(
+            f,
+            iter_coco_split_annotations(records, split_map, annotations_by_video, split),
+        )
+        f.write('],"categories":')
+        json.dump(categories, f, ensure_ascii=False)
+        f.write("}")
+    tmp_path.replace(path)
+    return image_count, annotation_count
 
 
 def main() -> None:
@@ -393,18 +458,16 @@ def main() -> None:
             f"发现 {link_stats['conflict_dir']} 个目标路径被目录占用，请手动检查输出目录"
         )
 
-    train_coco = build_coco_split(
+    train_images, train_annotations = count_coco_split(
         records=records,
         split_map=split_map,
         annotations_by_video=annotations_by_video,
-        categories=categories,
         split=TRAIN_SPLIT,
     )
-    valid_coco = build_coco_split(
+    valid_images, valid_annotations = count_coco_split(
         records=records,
         split_map=split_map,
         annotations_by_video=annotations_by_video,
-        categories=categories,
         split=VALID_SPLIT,
     )
 
@@ -418,10 +481,10 @@ def main() -> None:
         "num_categories": len(categories),
         "train_videos": sum(1 for record in records if split_map[record.split_dir_name] == TRAIN_SPLIT),
         "valid_videos": sum(1 for record in records if split_map[record.split_dir_name] == VALID_SPLIT),
-        "train_images": len(train_coco["images"]),
-        "valid_images": len(valid_coco["images"]),
-        "train_annotations": len(train_coco["annotations"]),
-        "valid_annotations": len(valid_coco["annotations"]),
+        "train_images": train_images,
+        "valid_images": valid_images,
+        "train_annotations": train_annotations,
+        "valid_annotations": valid_annotations,
         "sync_mode": "incremental_keep_existing_split",
         "last_sync_time": datetime.now().isoformat(timespec="seconds"),
     }
@@ -445,8 +508,22 @@ def main() -> None:
     }
 
     if not args.dry_run:
-        write_json_atomic(output_dir / TRAIN_SPLIT / "_annotations.coco.json", train_coco)
-        write_json_atomic(output_dir / VALID_SPLIT / "_annotations.coco.json", valid_coco)
+        write_coco_split_atomic(
+            output_dir / TRAIN_SPLIT / "_annotations.coco.json",
+            records=records,
+            split_map=split_map,
+            annotations_by_video=annotations_by_video,
+            categories=categories,
+            split=TRAIN_SPLIT,
+        )
+        write_coco_split_atomic(
+            output_dir / VALID_SPLIT / "_annotations.coco.json",
+            records=records,
+            split_map=split_map,
+            annotations_by_video=annotations_by_video,
+            categories=categories,
+            split=VALID_SPLIT,
+        )
         write_json_atomic(output_dir / "conversion_summary.json", summary)
         write_json_atomic(output_dir / "sync_summary.json", sync_summary)
 
