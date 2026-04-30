@@ -2,26 +2,20 @@
 set -euo pipefail
 
 # CONFIG="configs/dinov3/instruments/instance/eomt_base_640_ft.yaml"
-
-# 超声
-# CONFIG="configs/dinov3/ultrasound/instance/eomt_base_ft.yaml"
-# CKPT="eomt/vtvucmxe/checkpoints/last.ckpt"
-
-# 五叶牵拉钳
-CONFIG="configs/dinov3/wuye/instance/eomt_base_ft.yaml"
-CKPT="eomt/tb8jmv7e/checkpoints/last.ckpt"
+CONFIG="configs/dinov3/ultrasound/instance/eomt_base_ft.yaml"
+CKPT="eomt/vtvucmxe/checkpoints/last.ckpt"
 DEVICE="cuda:0"
 
 MODE="videos"
 
 INPUT_VIDEO=""
 INPUT_VIDEO_DIR=""
-INPUT_VIDEO_LIST="/mnt/FileExchange/users/zhouyang/instruments/iterupdate/五叶牵拉钳/batch2/remain/selected_video_paths.txt"
+INPUT_VIDEO_LIST="/mnt/FileExchange/users/zhouyang/instruments/iterupdate/术中超声/batch2/remain/remaining_video_paths_500_700.txt"
 INPUT_IMAGE=""
 INPUT_IMAGE_DIR=""
 
 OUTPUT_PATH=""
-OUTPUT_DIR="/mnt/FileExchange/users/zhouyang/instruments/iterupdate/五叶牵拉钳/batch3/"
+OUTPUT_DIR="/mnt/FileExchange/users/zhouyang/instruments/iterupdate/术中超声/batch2/"
 
 BATCH_SIZE=4
 IO_WORKERS=4

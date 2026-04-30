@@ -302,6 +302,10 @@ def build_output_npz_path_for_video(video_path: Path, npz_dir: Path) -> Path:
     return npz_dir / f"{video_path.stem}_rendered.npz"
 
 
+def should_skip_video_inference(output_video_path: Path, output_npz_path: Path) -> bool:
+    return output_video_path.exists() and output_npz_path.exists()
+
+
 def save_dense_outputs_to_npz(
     dense_outputs_per_frame: Sequence[dict[str, np.ndarray]],
     output_path: Path,
@@ -1198,6 +1202,9 @@ def infer_videos(args, model, class_names):
         for video_path in video_paths:
             output_path = build_output_video_path(video_path, output_video_dir)
             npz_output_path = build_output_npz_path_for_video(video_path, output_npz_dir)
+            if should_skip_video_inference(output_path, npz_output_path):
+                print(f"跳过已完成视频: {video_path} -> {output_path} | {npz_output_path}")
+                continue
             print(f"提交视频推理: {video_path} -> {output_path} | {npz_output_path}")
             future = executor.submit(
                 infer_video_to_path,
